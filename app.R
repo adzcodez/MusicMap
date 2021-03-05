@@ -10,6 +10,7 @@ library(dplyr)
 library(ggmap)
 library(htmltools)
 library(usethis)
+library(DT)
 source("utils.R")
 source("credentials.R")
 
@@ -48,7 +49,21 @@ token <- DSpoty::get_spotify_access_token(
 # )
     
 ui <- dashboardPage(
-    
+    skin = "purple", 
+    dashboardHeader(title = "Music Map"), 
+    dashboardSidebar(
+        fileInput("scrobblescsv", "Upload scrobbles .csv here"),
+        sliderInput("artist_dates", label = "Artist Date Range",
+                    min = 1950, max = 2030, value = c(1950, 2030),
+                    sep = "", step = 1),
+        sliderInput("listen_dates", label = "Listen Date Range",
+                    min = 2010, max = 2022, value = c(2010, 2022), 
+                    sep = "", step = 1)
+    ), 
+    dashboardBody(
+        fluidRow(box(width = 12, leafletOutput(outputId = "map"))),
+        fluidRow(box(width = 12, tableOutput(outputId = "table")))
+    )
 )
 
 
@@ -59,17 +74,20 @@ server <- function(input, output) {
         read.csv(input$scrobblescsv$datapath, header=FALSE, col.names=c("Artist", "Album", "Track", "Time"))
     })
     scrobbles_preprocessed <- reactive({ # Produces preprocessed scrobbles dataframe
+        req(input$listen_dates, scrobbles_upload())
         scrobbles <- scrobbles_upload() # Checks file is uploaded
-        scrobbles <- read.csv(input$scrobblescsv$datapath, header=FALSE, col.names=c("Artist", "Album", "Track", "Time")) # Reads the file
         scrobbles <- data.frame(scrobbles[1:3], apply(scrobbles[4], 2, processTime))
         scrobbles <- rename(scrobbles, Day=4, Month=5, Year=6, Hour=7, Minute=8)
-        scrobbles <- scrobbles[scrobbles$Year > 1970,]
+        scrobbles <- scrobbles[scrobbles$Year > 1970,] %>% 
+                     filter(Year >= input$listen_dates[1]) %>%
+                     filter(Year <= input$listen_dates[2])
          })
+        
     scrobbles_artist_plays <- reactive({ # Produces artist plays dataframe
         req(scrobbles_preprocessed())
         scrobbles_artist_plays <- scrobbles_preprocessed() %>% 
                                   count(Artist, sort=TRUE) %>% 
-                                  filter(n > 1500)
+                                  filter(n > 200)
     })
     scrobbles_artist_info <- reactive({
         req(scrobbles_artist_plays())
@@ -100,8 +118,29 @@ server <- function(input, output) {
         scrobbles_coordinates <- mutate(scrobbles_coordinates, Latitude=geocodes$lat, Longitude=geocodes$lon)
         scrobbles_coordinates <- scrobbles_coordinates[1:4]
     })
-    output$scrobbles_df <- renderTable({
-        scrobbles_coordinates()
+    scrobbles_artist_coordinates <- reactive({
+        req(scrobbles_coordinates(), scrobbles_artist_info(), scrobbles_artist_plays())
+        scrobbles_artist_coordinates <- left_join(scrobbles_artist_info(), scrobbles_coordinates(), by=c("Country", "Area")) 
+        scrobbles_artist_coordinates <- left_join(scrobbles_artist_coordinates, scrobbles_artist_plays(), by="Artist")
+        scrobbles_artist_coordinates$Label <-  paste("<p>", "Artist: ", scrobbles_artist_coordinates$Artist, "</p>",
+                                                     "<p>", "Plays: ", scrobbles_artist_coordinates$n, "</p>",
+                                                     "<p>", "Area: ", scrobbles_artist_coordinates$Area, "</p>")
+        scrobbles_artist_coordinates
+    })
+    output$table <- renderTable({
+        scrobbles_artist_coordinates()
+    })
+    output$map <- renderLeaflet({
+        map <- leaflet() %>% 
+            addProviderTiles(providers$CartoDB.DarkMatter) %>% 
+            setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
+            addCircleMarkers(lng=scrobbles_artist_coordinates()$Longitude, 
+                             lat=scrobbles_artist_coordinates()$Latitude,
+                             color="#FFF",
+                             weight=1,
+                             radius=10, 
+                             label=lapply(scrobbles_artist_coordinates()$Label, HTML), 
+                             clusterOptions=markerClusterOptions(showCoverageOnHover = FALSE)) 
     })
 }
 
