@@ -1,0 +1,385 @@
+---
+title: "Data Preprocessing and Table Creation"
+output: html_notebook
+---
+
+```{r Loading Libraries}
+library(tidyverse)
+```
+
+## Preprocessing
+
+This notebook will be used to preprocess the scrobbles .csv from using [this](https://benjaminbenben.com/lastfm-to-csv/) tool. We will first load the data and take a look at it.
+
+```{r Loading Data}
+
+scrobbles <- read.csv("scrobbles.csv", header=FALSE, col.names=c("Artist", "Album", "Track", "Time"))
+
+head(scrobbles)
+```
+
+### Processing Date
+
+We can see that the scrobble times are in a format that we want to improve. They are currently looking like "DD Month YYYY HH:MM". It would be easier to represent the month as a number. We will split each part of this column into its own column so that it is easier to work with.
+
+We cannot use as.Date() to create a date class, as we will lose the timestamp. We need to use POSIX classes. Specifically, POSIXlt which keeps date and time in a human readable format.
+
+```{r Time Example}
+
+head(scrobbles['Time'], 1)
+
+
+```
+
+```{r Processing Time of Scrobbles Dataframe - Slow}
+
+processTime <- function(input_time){
+  ' Returns a list in the format [day, month, year, hour, minute] '
+  time <- as.POSIXlt(input_time, format="%d %b %Y %H:%M")
+  
+  day <- time$mday
+  month <- (time$mon + 1) # Months are 0-indexed
+  year <- (time$year + 1900)  # Years since 1900
+  hour <- time$hour
+  min <- time$min
+  
+  new_time <- c(day, month, year, hour, min)
+  
+  return(new_time)
+}
+
+i = 1
+
+for (time in scrobbles$Time) {
+  new_time <- processTime(time)
+  scrobbles$Day[i] <- new_time[1]
+  scrobbles$Month[i] <- new_time[2]
+  scrobbles$Year[i] <- new_time[3]
+  scrobbles$Hour[i] <- new_time[4]
+  scrobbles$Min[i] <- new_time[5]
+  
+  i = i+1
+  
+}
+
+```
+
+I'm used to Python + Pandas, and this is far, far slower than Pandas. Is there a way to apply the function in a quick way rather than looping through the entire dataframe like this?
+
+Yes, using the chunk below. This is orders of magnitude quicker.
+
+```{r Processing Time of Scrobbles Dataframe - Quick}
+processTime <- function(input_time){
+  ' Returns a list in the format [day, month, year, hour, minute] '
+  time <- as.POSIXlt(input_time, format="%d %b %Y %H:%M")
+  
+  day <- time$mday
+  month <- (time$mon + 1) # Months are 0-indexed
+  year <- (time$year + 1900)  # Years since 1900
+  hour <- time$hour
+  min <- time$min
+  
+  new_time <- list(day, month, year, hour, min)
+  
+  return(new_time)
+}
+
+scrobbles <- data.frame(scrobbles[1:3], apply(scrobbles[4], 2, processTime))
+scrobbles <- rename(scrobbles, Day=4, Month=5, Year=6, Hour=7, Minute=8)
+
+
+```
+
+We have created a new scrobbles dataframe with a column for artist, album, track, day, month, year, hour and minute - splitting the previous time column into an easier to manipulate series of columns.
+
+If we look at the tail of our new scrobbles dataframe, we see that there are scrobbles in 1970 (UNIX start time), which is clearly wrong. We will remove all entries where the year is 1970. We find that there are 1679 incorrect rows.
+
+```{r Removing Time Errors}
+time_errors_df <- subset(scrobbles, Year==1970)
+dim(time_errors_df)
+head(time_errors_df)
+
+scrobbles <- scrobbles[!time_errors_bool]
+
+scrobbles <- scrobbles[scrobbles$Year > 1970,]
+```
+
+We now have a dataframe with the times in the format we want, and we have removed unwanted entries. We can now move on to creating a new table of unique artist information!
+
+## Table Creation
+### MusicBrainz and Artist Information
+
+[MusicBrainz](https://musicbrainz.org/) is a music database that has an API which facilitates queries for artist information. This is perfect for our use case - for each artist in our scrobbles, we can create a new table where artist is the primary key containing information about where they are located, when they formed and other information which we can use in analysis.
+
+The first step will be to install this unpublished and hopefully trustworthy MusicBrainz API linker so that we can query the database. 
+
+```{r Installing MusicBrainz API Link}
+# install.packages("devtools")
+# devtools::install_github("dmi3kno/musicbrainz")
+library(musicbrainz)
+```
+
+We will now get a list of unique artists in our scrobbles dataframe. For now, I only want artists who I have played over 10 times, because if I have less than this I probably don't even remember them. We will do this by grouping scrobbles by artist. We have 2,427 artists with no filter. With more than 10 plays, this becomes 706 artists. This is much more manageable given MusicBrainz' queries are rate limited. 
+
+```{r Artist Playcounts}
+artist_plays <- scrobbles %>% 
+                count(Artist, sort=TRUE) %>% 
+                filter(n > 100)
+
+artist_plays
+```
+
+Before we create the table, lets play with the library to find an artist, get their MusicBrainz ID, and then use this ID to look up information about them, as well as about their releases. We can use includes as an argument to include information such as releases and tags (which typically correspond to genre). 
+
+```{r Pulling MusicBrainz ID}
+
+mbv_id <-   search_artists("My Bloody Valentine") %>%
+            select(mbid) %>% 
+            slice(1) %>%
+            pull()
+
+```
+```{r Querying Artist Details Using ID}
+
+mbv_lookup <- lookup_artist_by_id(mbv_id, includes="tags")
+mbv_lookup
+```
+
+```{r}
+
+# The tags_list is a tibble
+
+tags_list <- mbv_lookup$tags
+
+tags_values <- tags_list[[1]][2]
+
+tags_genres <- tags_list[[1]][1]
+
+tags_values
+
+tags_genres
+
+tags_values <- as.numeric(unlist(tags_values))
+
+genre <- tags_genres[which.max(tags_values),]
+
+genre
+
+tags_df <- as_data_frame(tags_list)
+```
+
+
+```{r Querying Artist Releases Using ID}
+
+mbv_releases <- browse_release_groups_by("artist", mbv_id)
+mbv_loveless_id <- mbv_releases %>% 
+                   filter(title=="Loveless") %>% 
+                   select(1) %>%
+                   pull()
+mbv_loveless_lookup <- lookup_release_group_by_id(mbv_loveless_id)
+mbv_loveless_lookup
+
+```
+
+This has provided us with a lot of information in tables. We can see from mbv_lookup that My Bloody Valentine formed in 1983 in Dublin. mbv_releases has shown us that they have 25 release groups (albums, compilations, EPs and singles), and we could use these IDs to query further. 
+
+Having established all these operations, we can create a table containing each artist and information that we want - this will be year of formation (this is better for groups - for individuals, it is year of birth), country, area, and genre. We will first define some functions that will streamline this process. This will populate a matrix, which we will then coerce into our artist information dataframe. 
+
+```{r Functions to Pull Information}
+
+pull_artist_id <- function(artist) {
+  ' Retrieves query artist MBID for use in further queries ' 
+  id <- search_artists(artist) %>% 
+        select(mbid) %>% 
+        slice(1) %>% 
+        pull()
+  return(id)
+}
+
+pull_country <- function(df) {
+  country <- df$country
+  return(country)
+}
+
+pull_area <- function(df) {
+  area <- df$begin_area_name
+  return(area)
+}
+
+get_coords <- function(country, area){
+  
+  return(lat, long)
+}
+
+pull_year <- function(df, id) {
+  if (df$type == "Group"){ # If artist is a group, take year of formation
+    year <- df$life_span_begin
+  }
+  else { # If artist is a person, take year of first release
+    releases <- browse_release_groups_by("artist", id)
+    year <- sort(releases$first_releas_date)[1]
+  } 
+  return(year)
+}
+
+# I need this function to handle empty tags
+# Alternatively: use the lastFM API to get genre (probably better)
+pull_genre <- function(df) {
+  tags_list <- df$tags
+  if (is.null(unlist(tags_list))) {
+    return(NA)
+  }
+  tags_values <- as.numeric(unlist(tags_list[[1]][2]))
+  tags_genres <- tags_list[[1]][1]
+  genre <- tags_genres[which.max(tags_values),]
+  genre <- genre[1,1,1]
+  return(genre)
+  
+}
+
+
+```
+
+```{r Creating an Artist Information Dataframe}
+rows = dim(artist_plays)[1]
+cols = 5
+artist_info <- matrix(ncol=cols, nrow=rows)
+
+for (i in 1:rows) {
+  artist_name <- artist_plays$Artist[i]
+  print(artist_name)
+  artist_id <- pull_artist_id(artist_name)
+  artist_df <- lookup_artist_by_id(artist_id, includes="tags")
+  artist_info[i,1] <- artist_name # Artist name
+  artist_info[i,2] <- pull_country(artist_df) # Artist country
+  artist_info[i,3] <- pull_area(artist_df) # Artist area
+  artist_info[i,4] <- pull_year(artist_df, artist_id) # StartYear
+  artist_info[i,5] <- pull_genre(artist_df) # Genre
+}
+
+artist_info <- as.data.frame(artist_info) 
+artist_info <- rename(artist_info, Artist=1, Country=2, Area=3, StartYear=4, Genre=5)
+artist_info
+
+```
+
+We have now created a simple dataframe storing artists and some information about them. Some things to note just from this example: 
+
+* Some artists are wrong. My favourite MIKE is not from Antwerp and is not a DJ. 
+* There are quite a few NA values. NA country for Kanye West is surprising - you would think the country of origin for such a famous artist would be in the database, especially when it pulled the area. 
+* Areas are wrong - Kanye is not from Atlanta but Chicago. 
+* Genres are wrong - Have A Nice Life are not really a drone group. Nor would I define Duster's genre as "American". We can definitely improve our genre identification module, which we will do later. 
+
+### Creating a Location Table and Pulling Coordinates
+The next step will be to create a new table to store the coordinates of each area for each artist. The area and country form the primary key for this table, and by reducing it to each area we reduce the number of requests we send to the package that we will use to query coordinates. Let's start off by importing this library: 
+
+```{r Importing Libraries: Coordinates}
+library(dplyr)
+library(ggmap)
+```
+
+We will use the ggmap package to query coordinates. Let's create a new table with country and area as primary keys: 
+
+```{r Creating Coordinates Dataframe}
+coordinates_df <- unique(artist_info[c("Country", "Area")]) # Creates dataframe of unique country / area combinations
+coordinates_df["Latitude"] = NA; coordinates_df["Longitude"] = NA 
+coordinates_df <- mutate(coordinates_df, address=paste(Area, Country)) # Temporary address column to use in queries
+```
+
+We have created a temporary column combining area and country to use in our coordinate queries. We are going to turn this into a list by accessing it, and then use this list as input to ggmap's geocode() function, which will return coordinates. We will use Google as a source - this will require an API key. 
+
+```{r Getting Google API Key}
+key = "" # REMOVE THIS EVENTUALLY
+register_google(key = key)
+```
+
+
+```{r Querying Coordinates}
+addresses <- coordinates_df$address # List of addresses
+geocodes <- geocode(addresses, source = "google") # Creates list of lat / long
+coordinates_df <- mutate(coordinates_df, Latitude=geocodes$lat, Longitude=geocodes$lon)
+coordinates_df <- coordinates_df[1:4]
+coordinates_df
+```
+
+Nice - we now have a dataframe of areas with their latitude and longitude which we can join to our artist information table. It's time to use this data and put the artists on a map! 
+
+## Using Our Tables - Creating a Map
+The most important library for this purpose will be Leaflet. Leaflet lets you make interactive maps. 
+
+```{r Importing Libraries: Map and HTMLTools}
+library(leaflet)
+library(htmltools)
+```
+
+Let's quickly make a map to show how we can use Leaflet. 
+
+```{r A Basic Leaflet Map}
+
+map <- leaflet() %>% 
+       addProviderTiles(providers$CartoDB.DarkMatter) %>% 
+       setView(lng=-6.2603097	, lat=53.34981, zoom=5)
+map
+
+```
+
+Wow, that's cool! Now we want to add our data. We are going to use circle markers to represent artists around the world. We want the size of the bubble to correspond to either the number of artists from there, or the number of listens from there (this is something we should be able to change). We want to be able to click a bubble to expand information about it, such as the artists from there, and how many times we've listened to them, and our total listens in this area, and total artists in this area. 
+
+Doing this one step at a time, let's first make a map with circles representing our artists. 
+
+```{r Adding Map Markers}
+map <- leaflet() %>% 
+       addProviderTiles(providers$CartoDB.DarkMatter) %>% 
+       setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
+       addCircleMarkers(lng=coordinates_df$Longitude, 
+                        lat=coordinates_df$Latitude,
+                        color="#FFF",
+                        weight=1,
+                        radius=10)
+map
+
+```
+
+This is lacking a lot - overlapping artists simply lead to overlapping circles. You cannot click circles for information. The circles also just don't look like what we want. But, it's a start. Now, we are going to add pop-ups on hover to show the artist's name from that area. To do this, we are first going to have to join our coordinates to our artists dataframe. 
+
+We are also going to make a Label column in this dataframe which we will store information to be displayed on hover. This will show the artist's name, the number of plays, and the area they are from. Thus, we will also join our plays from the artist plays dataframe. We will format the label in HTML, so we will need to also use the HTML library. 
+
+```{r Joining Artist Info and Coordinates + Creating Labels}
+artist_info <- left_join(artist_info, coordinates_df, by=c("Country", "Area")) 
+artist_info <- left_join(artist_info, artist_plays, by="Artist")
+artist_info$Label <- paste("<p>", "Artist: ", artist_info$Artist, "</p>",
+                           "<p>", "Plays: ", artist_info$n, "</p>",
+                           "<p>", "Area: ", artist_info$Area, "</p>")
+```
+
+```{r Adding Information on Hover}
+
+map <- leaflet() %>% 
+       addProviderTiles(providers$CartoDB.DarkMatter) %>% 
+       setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
+       addCircleMarkers(lng=artist_info$Longitude, 
+                        lat=artist_info$Latitude,
+                        color="#FFF",
+                        weight=1,
+                        radius=10, 
+                        label=lapply(artist_info$Label, HTML), 
+                        clusterOptions=markerClusterOptions(showCoverageOnHover = FALSE)) 
+map
+```
+
+This iteration has added a lot of things. On hover, a HTML-formatted popup of artist name, plays and area comes up. Something else it adds that we have not discussed is clustering. This is in the clusterOptions argument of addCircleMarkers(). This automates clustering depending on the zoom, whichh I think looks quite cool, and you can zoom in for detail. It would be cool to tweak the clusters a bit - their size, and also on hover it would be cool to show the aggregate plays of that area, maybe the top artists in that area etc. 
+
+## Conclusion
+
+I think this concludes this notebook for now. There are still improvements to be made which I will come back to, such as:
+
+  * Improve genre identification using last.fm API
+  * Include several genres for each artist
+  * Improve start year identification - for individuals, do year of first release
+  * Some artists are wrong - for example, my MIKE entry is a DJ, Schoolboy Q is also in Germany. I can't think of a way to fix this.
+    I think the best I could do is, when deployed, the pop-up has a "wrong artist?" button which offers other artists to choose         from.
+  * Improve pop-up information: 
+      + Should it be on click or on hover? 
+      + Could I have a sleeker pop-up that has an image of the artist, their name, the area, number of plays etc? 
+      
+Regardless, I want to add interaction such as genre and year subsetting and deployment. So the next step is creating a Shiny app. 
