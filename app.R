@@ -34,19 +34,6 @@ token <- DSpoty::get_spotify_access_token(
     client_id = Sys.getenv("client_id"),
     client_secret = Sys.getenv("client_secret")
 )
-
-# # UI
-# ui <- fluidPage(
-#     titlePanel("Spotify Map"),
-#     sidebarLayout(
-#         sidebarPanel(
-#             fileInput("scrobblescsv", "Upload scrobbles .csv here")
-#         ), 
-#         mainPanel(
-#            tableOutput("scrobbles_df")
-#         )
-#     )
-# )
     
 ui <- dashboardPage(
     skin = "purple", 
@@ -56,13 +43,13 @@ ui <- dashboardPage(
         sliderInput("artist_dates", label = "Artist Date Range",
                     min = 1950, max = 2030, value = c(1950, 2030),
                     sep = "", step = 1),
-        sliderInput("listen_dates", label = "Listen Date Range",
-                    min = 2010, max = 2022, value = c(2010, 2022), 
-                    sep = "", step = 1)
+        sliderInput("listen_dates", label = "Listen date range", 
+                    min = as.Date("2012-01-01"), max = as.Date("2022-01-01"), 
+                    value=c(as.Date("2012-01-01"), as.Date("2022-01-01")), timeFormat = "%F")
     ), 
     dashboardBody(
         fluidRow(box(width = 12, leafletOutput(outputId = "map"))),
-        fluidRow(box(width = 12, tableOutput(outputId = "table")))
+        fluidRow(box(width = 12, dataTableOutput(outputId = "table")))
     )
 )
 
@@ -73,23 +60,27 @@ server <- function(input, output) {
         req(input$scrobblescsv, file.exists(input$scrobblescsv$datapath))
         read.csv(input$scrobblescsv$datapath, header=FALSE, col.names=c("Artist", "Album", "Track", "Time"))
     })
-    scrobbles_preprocessed <- reactive({ # Produces preprocessed scrobbles dataframe
-        req(input$listen_dates, scrobbles_upload())
-        scrobbles <- scrobbles_upload() # Checks file is uploaded
-        scrobbles <- data.frame(scrobbles[1:3], apply(scrobbles[4], 2, processTime))
-        scrobbles <- rename(scrobbles, Day=4, Month=5, Year=6, Hour=7, Minute=8)
-        scrobbles <- scrobbles[scrobbles$Year > 1970,] %>% 
-                     filter(Year >= input$listen_dates[1]) %>%
-                     filter(Year <= input$listen_dates[2])
+    
+    ' Inputs and preprocessing'
+    scrobbles_preprocessed <- reactive({ # Handles the preprocessing of csv
+        ' This handles the preprocessing of the CSV '
+        req(scrobbles_upload())
+        scrobbles <- scrobbles_upload()                                                  # Checks file is uploaded
+        scrobbles <- data.frame(scrobbles[1:3], apply(scrobbles[4], 2, processTime))     # Preprocesses dates
+        scrobbles <- rename(scrobbles, Day=4, Month=5, Year=6, Hour=7, Minute=8, Date=9)
+        scrobbles <- scrobbles[scrobbles$Year > 1970,]                                   # Removes incorrect dates
+        # scrobbles$Date <- paste(scrobbles$Day, scrobbles$Month, scrobbles$Year, sep='-') # Produces a date column DD-MM-YYYY
          })
         
     scrobbles_artist_plays <- reactive({ # Produces artist plays dataframe
+        ' Produces a dataframe of artists with >n plays '
         req(scrobbles_preprocessed())
-        scrobbles_artist_plays <- scrobbles_preprocessed() %>% 
-                                  count(Artist, sort=TRUE) %>% 
-                                  filter(n > 200)
+        scrobbles_artist_plays <- scrobbles_preprocessed() %>%
+                                  count(Artist, sort=TRUE) %>%
+                                  filter(n > 2000)
     })
     scrobbles_artist_info <- reactive({
+        ' Produces a dataframe of artist information from artists in artist_plays dataframe by querying MusicBrainz ' 
         req(scrobbles_artist_plays())
         rows = dim(scrobbles_artist_plays())[1]
         cols = 5
@@ -109,6 +100,7 @@ server <- function(input, output) {
         scrobbles_artist_info <- rename(scrobbles_artist_info, Artist=1, Country=2, Area=3, StartYear=4, Genre=5)
     })
     scrobbles_coordinates <- reactive({
+        ' Produces a dataframe of area coordinates for artist areas by querying Google Maps '
         req(scrobbles_artist_info())
         scrobbles_coordinates <- unique(scrobbles_artist_info()[c("Country", "Area")])
         scrobbles_coordinates["Latitude"] = NA; scrobbles_coordinates["Longitude"] = NA
@@ -118,28 +110,49 @@ server <- function(input, output) {
         scrobbles_coordinates <- mutate(scrobbles_coordinates, Latitude=geocodes$lat, Longitude=geocodes$lon)
         scrobbles_coordinates <- scrobbles_coordinates[1:4]
     })
-    scrobbles_artist_coordinates <- reactive({
-        req(scrobbles_coordinates(), scrobbles_artist_info(), scrobbles_artist_plays())
-        scrobbles_artist_coordinates <- left_join(scrobbles_artist_info(), scrobbles_coordinates(), by=c("Country", "Area")) 
-        scrobbles_artist_coordinates <- left_join(scrobbles_artist_coordinates, scrobbles_artist_plays(), by="Artist")
-        scrobbles_artist_coordinates$Label <-  paste("<p>", "Artist: ", scrobbles_artist_coordinates$Artist, "</p>",
-                                                     "<p>", "Plays: ", scrobbles_artist_coordinates$n, "</p>",
-                                                     "<p>", "Area: ", scrobbles_artist_coordinates$Area, "</p>")
-        scrobbles_artist_coordinates
+    scrobbles_dates <- reactive({
+        ' Returns a subset dataframe of scrobbles within the input dates '
+        req(input$listen_dates, scrobbles_preprocessed())
+        scrobbles_dates <- scrobbles_preprocessed() %>%  
+                           filter(Date >= input$listen_dates[1]) %>%
+                           filter(Date <= input$listen_dates[2])
     })
-    output$table <- renderTable({
-        scrobbles_artist_coordinates()
+    scrobbles_date_plays <- reactive({
+        ' Counts the plays of each artist within the input dates '
+        req(scrobbles_dates(), input$listen_dates)
+        scrobbles_date_plays <- scrobbles_dates() %>%  
+                                count(Artist, sort=TRUE) %>% 
+                                filter(n >= 10)
+        names(scrobbles_date_plays) <- c("Artist", "Plays") # Rename columns
+        scrobbles_date_plays
+    })
+    scrobbles_final <- reactive({
+        ' Produces the final dataframe containing all artist info joined to scrobbles, and a HTML label '
+        req(scrobbles_coordinates(), scrobbles_artist_info(), scrobbles_dates(), input$listen_dates)
+        scrobbles_final <- left_join(scrobbles_artist_info(), scrobbles_coordinates(), by=c("Country", "Area"))
+        scrobbles_final <- left_join(scrobbles_date_plays(), scrobbles_final, by = "Artist")
+        scrobbles_final$Label <-  paste("<p>", "Artist: ", scrobbles_final$Artist, "</p>",
+                                        "<p>", "Plays: ", scrobbles_final$Plays, "</p>",
+                                        "<p>", "Area: ", scrobbles_final$Area, "</p>")
+        scrobbles_final
+    })
+    
+    ' Outputs '
+    output$table <- renderDataTable({
+        ' Renders the table (troubleshooting) '
+        scrobbles_final()
     })
     output$map <- renderLeaflet({
+        ' Renders the map '
         map <- leaflet() %>% 
             addProviderTiles(providers$CartoDB.DarkMatter) %>% 
             setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
-            addCircleMarkers(lng=scrobbles_artist_coordinates()$Longitude, 
-                             lat=scrobbles_artist_coordinates()$Latitude,
+            addCircleMarkers(lng=scrobbles_final()$Longitude, 
+                             lat=scrobbles_final()$Latitude,
                              color="#FFF",
                              weight=1,
                              radius=10, 
-                             label=lapply(scrobbles_artist_coordinates()$Label, HTML), 
+                             label=lapply(scrobbles_final()$Label, HTML), 
                              clusterOptions=markerClusterOptions(showCoverageOnHover = FALSE)) 
     })
 }

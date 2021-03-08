@@ -11,8 +11,9 @@ processTime <- function(input_time){
   year <- (time$year + 1900)  # Years since 1900
   hour <- time$hour
   min <- time$min
+  date <- as.Date(time)
   
-  new_time <- list(day, month, year, hour, min)
+  new_time <- list(day, month, year, hour, min, date)
   
   return(new_time)
 }
