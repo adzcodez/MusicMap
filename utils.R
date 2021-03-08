@@ -11,8 +11,9 @@ processTime <- function(input_time){
   year <- (time$year + 1900)  # Years since 1900
   hour <- time$hour
   min <- time$min
+  date <- as.Date(time)
   
-  new_time <- list(day, month, year, hour, min)
+  new_time <- list(day, month, year, hour, min, date)
   
   return(new_time)
 }
@@ -44,10 +45,13 @@ get_coords <- function(country, area){
 }
 
 pull_year <- function(df, id) {
-  if (df$type == "Group"){ # If artist is a group, take year of formation
+  if (is.null(df$type)){
     year <- df$life_span_begin
-  }
-  else { # If artist is a person, take year of first release
+  } else if (is.na(df$type)) {
+    year <- df$life_span_begin
+  } else if (df$type == "Group"){ # If artist is a group, take year of formation
+    year <- df$life_span_begin
+  } else { # If artist is a person, take year of first release
     releases <- browse_release_groups_by("artist", id)
     year <- sort(releases$first_releas_date)[1]
   } 
