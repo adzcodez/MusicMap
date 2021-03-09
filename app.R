@@ -14,6 +14,9 @@ library(DT)
 source("utils.R")
 source("credentials.R")
 
+# Global parameters
+listen_threshold = 100
+
 # Git options
 use_git_config(user.name = "adzcodez", user.email = "adamdeharo@gmail.com")
 
@@ -77,7 +80,7 @@ server <- function(input, output) {
         req(scrobbles_preprocessed())
         scrobbles_artist_plays <- scrobbles_preprocessed() %>%
                                   count(Artist, sort=TRUE) %>%
-                                  filter(n > 2000)
+                                  filter(n > listen_threshold)
     })
     scrobbles_artist_info <- reactive({
         ' Produces a dataframe of artist information from artists in artist_plays dataframe by querying MusicBrainz ' 
