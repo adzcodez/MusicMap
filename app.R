@@ -15,7 +15,8 @@ source("utils.R")
 source("credentials.R")
 
 # Global parameters
-listen_threshold = 100
+listen_threshold = 2000
+map_theme = providers$CartoDB.DarkMatter
 
 # Git options
 use_git_config(user.name = "adzcodez", user.email = "adamdeharo@gmail.com")
@@ -48,14 +49,24 @@ ui <- dashboardPage(
                     sep = "", step = 1),
         sliderInput("listen_dates", label = "Listen date range", 
                     min = as.Date("2012-01-01"), max = as.Date("2022-01-01"), 
-                    value=c(as.Date("2012-01-01"), as.Date("2022-01-01")), timeFormat = "%F")
+                    value=c(as.Date("2012-01-01"), as.Date("2022-01-01")), timeFormat = "%F"),
+        selectInput("map_theme", label = "Map theme", 
+                    choices = c("Dark"    = providers$CartoDB.DarkMatter, 
+                                "Light"   = providers$Esri.WorldGrayCanvas,
+                                "Natural" = providers$Esri.WorldTopoMap), 
+                    size = 5, selected = map_theme, 
+                    multiple = FALSE, selectize = FALSE)
     ), 
     dashboardBody(
-        fluidRow(box(width = 12, leafletOutput(outputId = "map"))),
+        fluidRow(box(width = 12, style = 'height: 90vh', leafletOutput(outputId = "map", height = '90vh'))),
         fluidRow(box(width = 12, dataTableOutput(outputId = "table")))
     )
 )
-
+# selectInput("variable", "Variable:",
+#             c("Cylinders" = "cyl",
+#               "Transmission" = "am",
+#               "Gears" = "gear")),
+# tableOutput("data")
 
 # Server
 server <- function(input, output) {
@@ -72,7 +83,6 @@ server <- function(input, output) {
         scrobbles <- data.frame(scrobbles[1:3], apply(scrobbles[4], 2, processTime))     # Preprocesses dates
         scrobbles <- rename(scrobbles, Day=4, Month=5, Year=6, Hour=7, Minute=8, Date=9)
         scrobbles <- scrobbles[scrobbles$Year > 1970,]                                   # Removes incorrect dates
-        # scrobbles$Date <- paste(scrobbles$Day, scrobbles$Month, scrobbles$Year, sep='-') # Produces a date column DD-MM-YYYY
          })
         
     scrobbles_artist_plays <- reactive({ # Produces artist plays dataframe
@@ -147,9 +157,10 @@ server <- function(input, output) {
     })
     output$map <- renderLeaflet({
         ' Renders the map '
+        req(input$map_theme)
         map <- leaflet() %>% 
-            addProviderTiles(providers$CartoDB.DarkMatter) %>% 
-            setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
+            addProviderTiles(input$map_theme) %>% 
+            # setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
             addCircleMarkers(lng=scrobbles_final()$Longitude, 
                              lat=scrobbles_final()$Latitude,
                              color="#FFF",
