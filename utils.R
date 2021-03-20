@@ -70,5 +70,40 @@ pull_genre <- function(df) {
   genre <- tags_genres[which.max(tags_values),]
   genre <- genre[1,1,1]
   return(genre)
-  
 }
+
+# These are Spotify helper functiosn to pull artists from playlists
+
+build_artist_dataframe <- function(playlist_id, token) {
+  ' Builds a dataframe of artists in a playlist, with each artist being a row '
+  playlist <- get_playlist(playlist_id, authorization=token) # Get the playlist
+  num_songs <- playlist$tracks$total                         # and total tracks
+  
+  total_batches <- ceiling(num_songs / 100) # We can only query 100 at a time
+  batch_offset <- 0                         # So we will pull 100 and then increment offset by 100
+  artist_names <- c()                       # Empty list to append names to
+  
+  for(batch in 1:total_batches) { # For each batch
+    batch_artists <- get_artists_in_batch(playlist_id, batch_offset, token) # Get the artists in the batch
+    batch_offset <- batch_offset + 100 # Increment offset by 100
+    artist_names <- append(artist_names, batch_artists)# Append the batch artists to the list
+  }
+  
+  artist_names <- as.data.frame(artist_names)    # Turn the list of names into a dataframe
+  artist_names <- unique(artist_names)           # Remove duplicate artists
+  artist_names <- rename(artist_names, Artist=1) # Rename first column to 'Artist'
+  return(artist_names)
+}
+
+get_artists_in_batch <- function(playlist_id, batch_offset, token) {
+  ' Builds a vector of artists in each batch of songs '
+  batch_artists <- c()
+  playlist_info <- get_playlist_items(playlist_id=playlist_id, offset=batch_offset, authorization=token)  # Get the playlist items
+  artists <- playlist_info$track.album.artists          # This is a dataframe
+  for(artist in 1:length(artists)) {                    # For each artist dataframe
+    artist_name <- as.data.frame(artists[artist])$name  # Get the artist name
+    batch_artists <- append(batch_artists, artist_name) # Append it to the list of names
+  }
+  return(batch_artists)
+}
+

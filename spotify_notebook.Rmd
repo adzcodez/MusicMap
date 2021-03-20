@@ -1,0 +1,87 @@
+---
+title: "spotify_notebook"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Spotify Notebook
+This notebook is just going to try to use the tinyspotifyr package to access playlist information, and demonstrate other functions in the library. First, we will import the credentials for the token. 
+
+```{r Credentials and Libraries}
+source("credentials.R")
+library(DSpoty)
+library(tinyspotifyr)
+
+
+# Generate access token for Spotify API
+client_id <- return_spotify_client()
+client_secret <- return_spotify_secret()
+redirect_uri <- ''
+Sys.setenv(client_id = client_id)
+Sys.setenv(client_secret = client_secret)
+token <- DSpoty::get_spotify_access_token(
+  client_id = Sys.getenv("client_id"),
+  client_secret = Sys.getenv("client_secret")
+)
+```
+
+## Getting songs in a playlist
+There are several functions in the documentation for get_playlist and other methods. 
+
+```{r}
+playlist_uri = '7u3YJQGwRlM8huOeDk6agI'
+
+```
+
+So we can access the artists in a playlist, but it comes in a dataframe. We want a function that is able to automatically populate a dataframe with each unique artist in a playlist. This is also made more complicated by the fact we can only request 100 tracks at a time, so we will need to query about $\frac{n}{100}$ times to get every artist. 
+
+```{r Creating an Artist Dataframe from a Playlist URI}
+
+build_artist_dataframe <- function(playlist_id, token) {
+  ' Builds a dataframe of artists in a playlist, with each artist being a row '
+  playlist <- get_playlist(playlist_id, authorization=token) # Get the playlist
+  num_songs <- playlist$tracks$total                         # and total tracks
+  
+  total_batches <- ceiling(num_songs / 100) # We can only query 100 at a time
+  batch_offset <- 0                         # So we will pull 100 and then increment offset by 100
+  artist_names <- c()                       # Empty list to append names to
+    
+  for(batch in 1:total_batches) { # For each batch
+    batch_artists <- get_artists_in_batch(playlist_id, batch_offset, token) # Get the artists in the batch
+    batch_offset <- batch_offset + 100 # Increment offset by 100
+    artist_names <- append(artist_names, batch_artists)# Append the batch artists to the list
+  }
+  
+  artist_names <- as.data.frame(artist_names)    # Turn the list of names into a dataframe
+  artist_names <- unique(artist_names)           # Remove duplicate artists
+  artist_names <- rename(artist_names, Artist=1) # Rename first column to 'Artist'
+  return(artist_names)
+}
+
+get_artists_in_batch <- function(playlist_id, batch_offset, token) {
+  ' Builds a vector of artists in each batch of songs '
+  batch_artists <- c()
+  playlist_info <- get_playlist_items(playlist_id=playlist_id, offset=batch_offset, authorization=token)  # Get the playlist items
+  artists <- playlist_info$track.album.artists          # This is a dataframe
+  for(artist in 1:length(artists)) {                    # For each artist dataframe
+    artist_name <- as.data.frame(artists[artist])$name  # Get the artist name
+    batch_artists <- append(batch_artists, artist_name) # Append it to the list of names
+  }
+  return(batch_artists)
+}
+
+
+
+```
+
+We can now build a dataframe of artists from a playlist name. This will do for now, but in the future it would be nice to use this library for more features such as: 
+
+  * Get artist profile picture (and use this for plotting on the map)
+  * Use artist information for the label 
+      + Have the artist picture, artist top tracks, maybe a song preview
+  * Allow a user to log in and select playlists / liked songs
+
+

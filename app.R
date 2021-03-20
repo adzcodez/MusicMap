@@ -15,7 +15,7 @@ source("utils.R")
 source("credentials.R")
 
 # Global parameters
-listen_threshold = 2000
+listen_threshold = 100
 map_theme = providers$CartoDB.DarkMatter
 
 # Git options
@@ -62,11 +62,7 @@ ui <- dashboardPage(
         fluidRow(box(width = 12, dataTableOutput(outputId = "table")))
     )
 )
-# selectInput("variable", "Variable:",
-#             c("Cylinders" = "cyl",
-#               "Transmission" = "am",
-#               "Gears" = "gear")),
-# tableOutput("data")
+
 
 # Server
 server <- function(input, output) {
@@ -163,9 +159,10 @@ server <- function(input, output) {
             # setView(lng=-6.2603097	, lat=53.34981, zoom=5) %>% 
             addCircleMarkers(lng=scrobbles_final()$Longitude, 
                              lat=scrobbles_final()$Latitude,
-                             color="#FFF",
+                             stroke = TRUE, color="black",
+                             fillColor = "#FFF", opacity = 100,
                              weight=1,
-                             radius=10, 
+                             # radius = ~scrobbles$Plays/100,
                              label=lapply(scrobbles_final()$Label, HTML), 
                              clusterOptions=markerClusterOptions(showCoverageOnHover = FALSE)) 
     })
